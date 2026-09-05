@@ -17,7 +17,18 @@ st.set_page_config(
 )
 
 st.title("⚖️ International Law Q&A")
-st.caption("Ask questions about International Law. Answers are grounded only in the provided PDF.")
+st.caption(
+    "Ask questions about International Law. "
+    "Answers are grounded only in the provided PDF."
+)
+
+
+# -------------------------------------------------
+# Chat Memory
+# -------------------------------------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
 
 # -------------------------------------------------
 # Load resources once (cached)
@@ -29,31 +40,71 @@ def load_vectorstore():
         embedding_function=embedding_model
     )
 
+
 @st.cache_resource
 def load_model():
-    return ChatGoogleGenerativeAI(model = "gemini-3.6-flash", max_output_tokens = 1024)
+    return ChatGoogleGenerativeAI(
+        model="gemini-3.6-flash",
+        max_output_tokens=1024
+    )
+
 
 vectorstore = load_vectorstore()
+
 retriever = vectorstore.as_retriever(
     search_type="mmr",
-    search_kwargs={"k": 3, "fetch_k": 10, "lambda_mult": 0.5}
+    search_kwargs={
+        "k": 3,
+        "fetch_k": 10,
+        "lambda_mult": 0.5
+    }
 )
+
 model = load_model()
 
-template = ChatPromptTemplate.from_messages([
-    ("system", 
-     """You are a helpful AI Assistant.
-Use only the provided context to answer the question.
-If you do not find the answer in the context, say "I could not find the relevant answer" and do not make up an answer.
-"""),
-    ("human", """context : {context},
-question : {question}""")
-])
 
 # -------------------------------------------------
-# Sidebar – settings
+# Prompt
 # -------------------------------------------------
-    
+template = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """You are a helpful AI Assistant specializing in International Law.
+
+Use only the provided retrieved context to answer the user's question.
+
+You may use the conversation history only to understand references,
+follow-up questions, and conversational context.
+
+Do not use your general knowledge to provide factual information
+that is not supported by the retrieved context.
+
+If the answer cannot be found in the provided context, say:
+"I could not find the relevant answer"
+
+Do not make up or assume information."""
+    ),
+    (
+        "human",
+        """Conversation history:
+{chat_history}
+
+Retrieved context:
+{context}
+
+Current question:
+{question}"""
+    )
+])
+
+
+# -------------------------------------------------
+# Display Chat History
+# -------------------------------------------------
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
 
 # -------------------------------------------------
 # Main chat interface
@@ -65,34 +116,107 @@ query = st.text_area(
 )
 
 col1, col2 = st.columns([1, 5])
-with col1:
-    ask_button = st.button("Ask", type="primary", use_container_width=True)
-with col2:
-    clear_button = st.button("Clear", use_container_width=True)
 
+with col1:
+    ask_button = st.button(
+        "Ask",
+        type="primary",
+        use_container_width=True
+    )
+
+with col2:
+    clear_button = st.button(
+        "Clear",
+        use_container_width=True
+    )
+
+
+# -------------------------------------------------
+# Clear Conversation
+# -------------------------------------------------
 if clear_button:
+    st.session_state.messages = []
     st.rerun()
 
-if ask_button and query.strip():
-    with st.spinner("Retrieving relevant context and generating answer..."):
-        # Retrieve documents
-        docs = retriever.invoke(query)
-        context = "\n\n".join([doc.page_content for doc in docs])
 
-        # Build prompt & call model
-        prompt = template.invoke({"context": context, "question": query})
+# -------------------------------------------------
+# Ask Question
+# -------------------------------------------------
+if ask_button and query.strip():
+
+    # Create conversation history before adding current question
+    chat_history = "\n".join(
+        f"{message['role']}: {message['content']}"
+        for message in st.session_state.messages
+    )
+
+    with st.spinner(
+        "Retrieving relevant context and generating answer..."
+    ):
+
+        # -------------------------------------------------
+        # Retrieve relevant documents
+        # -------------------------------------------------
+        docs = retriever.invoke(query)
+
+        context = "\n\n".join(
+            doc.page_content
+            for doc in docs
+        )
+
+        # -------------------------------------------------
+        # Build prompt
+        # -------------------------------------------------
+        prompt = template.invoke({
+            "chat_history": chat_history,
+            "context": context,
+            "question": query
+        })
+
+        # -------------------------------------------------
+        # Generate answer
+        # -------------------------------------------------
         result = model.invoke(prompt)
 
-    # Display answer
-    st.markdown("### Answer")
-    st.markdown(result.content[0]["text"])
+    answer = result.content
 
-    # Optional: show retrieved chunks
+    # Handle content blocks if returned by the model
+    if isinstance(answer, list):
+        answer = "\n".join(
+            block.get("text", "")
+            for block in answer
+            if isinstance(block, dict)
+        )
+
+    # -------------------------------------------------
+    # Save conversation to memory
+    # -------------------------------------------------
+    st.session_state.messages.append({
+        "role": "user",
+        "content": query
+    })
+
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": answer
+    })
+
+    # -------------------------------------------------
+    # Display current answer
+    # -------------------------------------------------
+    st.markdown("### Answer")
+    st.markdown(answer)
+
+    # -------------------------------------------------
+    # Show retrieved context
+    # -------------------------------------------------
     with st.expander("Show retrieved context"):
         for i, doc in enumerate(docs):
-            st.markdown(f"**Chunk {i+1}:**")
+            st.markdown(f"**Chunk {i + 1}:**")
             st.markdown(doc.page_content)
             st.markdown("---")
 
+
 elif ask_button and not query.strip():
+
     st.warning("Please enter a question.")

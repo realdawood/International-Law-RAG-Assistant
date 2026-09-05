@@ -1,8 +1,10 @@
 from dotenv import load_dotenv
+from langchain.messages import SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_chroma import Chroma
 from embedding.embeddings import embedding_model
+from langchain_core.messages import HumanMessage, SystemMessage
 
 
 load_dotenv()  # Load environment variables from .env file
@@ -20,6 +22,8 @@ if you do not find the answer in the context, say "I could not find the relevant
 """), ("human", """context : {context},
 question : {question}""")])
 
+
+
 query = input("Feel free to ask any question related to International Law: ")
 
 docs = retriever.invoke(query)
@@ -27,6 +31,13 @@ docs = retriever.invoke(query)
 context = "\n".join([doc.page_content for doc in docs])
 
 prompt = template.invoke({"context": context, "question": query})
+
+Memory = [
+    SystemMessage(content="""You are a helpful AI Assitant.
+Use only the provided context to answer the question.
+if you do not find the answer in the context, say "I could not find the relevant answer" and do not make up an answer.
+"""), HumanMessage(content=f"context : {context}, question : {query}"),]
+]
 
 result = model.invoke(prompt)
 
